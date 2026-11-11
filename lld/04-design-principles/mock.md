@@ -1,98 +1,135 @@
-# Design Principles — Mock Interview Q&A
+# Design Principles — Real-World Mock Interview
 
-This file is meant to sound like a practical engineering interview. The goal is not to memorize slogans but to explain trade-offs and choose the least costly design.
+These scenarios focus on judgment under realistic change pressure: existing behavior, deadlines, production risk, and incomplete requirements. Use the sample answers to practice explaining the decision and its trade-offs, not to memorize a single “correct” design.
 
-## 1. What is DRY, and why is it easy to misuse?
+## 1. Two similar calculations produce different customer totals. Would you deduplicate them?
 
-### Answer
+### Interviewer
 
-DRY means there should be one authoritative representation of a fact or business rule. The goal is to avoid copying the same decision across many places because that creates drift and makes bug fixes inconsistent.
+The checkout and invoice services both calculate tax. The code looks nearly identical, but checkout rounds per line item while invoicing rounds once at the invoice total. A bug fix is needed in both paths. Would you extract a shared tax helper?
 
-The common mistake is applying DRY to code that merely looks similar. If two paths share a formula but have different rounding policies, they are not the same rule. A helper that hides the difference behind conditionals creates a more complex abstraction than the original code did.
+### Strong answer
 
-The right question is: is this the same knowledge, or just the same shape? If the same fact is repeated in multiple places, unify it. If the behavior differs by policy, keep the policy explicit.
+First I would confirm the tax and rounding rules with the domain owner and add examples for the cases where the totals diverge. The important distinction is not code shape; it is whether both paths represent the same business rule.
 
-## 2. When is KISS more important than a more “elegant” abstraction?
+If the tax rate lookup or another rule is genuinely shared, I would centralize that knowledge while keeping the rounding policy explicit. I would not hide both behaviors in a helper full of flags or branching just to eliminate similar lines. That would make a future change harder to reason about and could silently change customer totals.
 
-### Answer
+If the underlying rule really is identical and only duplicated by accident, I would extract it and update both paths in one tested change. DRY is about one authoritative source for the same knowledge, not one implementation for superficially similar code.
 
-KISS becomes more important when the abstraction adds conceptual overhead without removing enough duplication or risk. A design that looks elegant but requires ten new classes and a large amount of indirection can be harder to understand than the direct code.
+### Follow-up: The deadline allows changing only one path. What do you do?
 
-The simplest design is not the one with the fewest lines; it is the one with the least mental overhead while still preserving correct behavior and expected change. If a team cannot explain the structure in a few paragraphs, the abstraction may be doing more harm than good.
+I would make the smallest safe change to the affected path, add a regression test, and record the duplicate for follow-up. Forcing a broad refactor into a constrained fix increases risk without necessarily addressing the immediate defect.
 
-A strong design answer is: “I prefer the smallest design that still makes the invariant and variation obvious.”
+## 2. A generic rules engine is proposed for a three-rule discount feature. Is that KISS or YAGNI?
 
-## 3. What does YAGNI mean in practice?
+### Interviewer
 
-### Answer
+The current discount feature has three rules and one team maintaining it. A proposal adds a rule DSL, database configuration, plugin loading, and a rules dashboard because “discounts will grow.” What would you recommend?
 
-YAGNI means do not build a speculative feature or a whole extensibility framework for a requirement that has not been proven. The design should still be easy to adapt, but the team should not spend time implementing a complex system that nobody has asked for.
+### Strong answer
 
-For example, if there is only one payment provider today, it is poor design to build a plugin registry, dynamic provider lookup, and configuration layer “for future providers.” That is speculative design. If a second provider or requirement appears later, then the abstraction becomes justified.
+I would ask what change is actually expected: how often rules change, who needs to change them, whether non-engineers must configure them, and what auditability is required. If the rules are stable and changed through normal releases, a straightforward, tested implementation is likely easier to maintain than a configurable platform.
 
-The real principle is: build the next real need, not a hypothetical future.
+If the business needs frequent rule changes by authorized operators, including history, approvals, or effective dates, a rules system may be justified. That is a concrete requirement, not merely a prediction that the code might grow.
 
-## 4. When would you choose composition over inheritance?
+KISS is not “fewest lines,” and YAGNI is not “never prepare for change.” I would implement the current needs with clear boundaries and defer the expensive framework until its operational value is established.
 
-### Answer
+### Follow-up: How do you keep the simpler design adaptable?
 
-I choose composition when the relationship is not really a subtype relationship. Inheritance is for “is-a” semantics; composition is for “has-a” or “uses-a” semantics.
+Keep the rules readable and tests explicit. Avoid coupling unrelated checkout behavior to their implementation. That leaves a manageable seam for a later refactor without paying today for a framework we may not need.
 
-A classic example is a billing engine where pricing rules depend on region, currency, and payment method. If we create a class per combination, we get a combinatorial explosion and brittle hierarchy. Better is to compose separate policies: one for pricing, one for validation, one for region rules.
+## 3. A class hierarchy is growing with combinations of region, currency, and payment method. What would you change?
 
-Inheritance is still appropriate when there is a genuine shared contract and the subclasses truly behave like the parent under the parent’s rules.
+### Interviewer
 
-## 5. Explain the Law of Demeter in plain English.
+There are now subclasses such as `EuCardPayment`, `UsCardPayment`, and `EuWalletPayment`. A new currency requires more classes, and some overrides duplicate behavior. How would you approach this?
 
-### Answer
+### Strong answer
 
-The Law of Demeter says a class should talk to its immediate collaborators rather than walk through a long chain of objects to reach data or behavior it doesn’t own.
+I would check whether these subclasses are true behavioral subtypes or are encoding combinations of independent dimensions. Region, currency, and payment method often vary independently; representing every combination as a class leads to a cross-product of types.
 
-Example:
+If that is the case, I would compose focused policies or collaborators for the dimensions that actually vary, and let a payment workflow coordinate them. I would keep combinations explicit where rules interact rather than assume the dimensions are always independent.
 
-```java
-if (order.getCustomer().getAddress().getCountry().getCode().equals("US")) { ... }
-```
+I would migrate incrementally: characterize current behavior with tests, select one well-understood path, introduce composition there, and compare the resulting complexity. Composition can reduce subclass growth, but excessive tiny objects and opaque wiring can be worse than a small hierarchy.
 
-This couples the caller to multiple internal object graphs. A better design is to ask the `Order` object a domain-level question:
+### Follow-up: When would you keep inheritance?
 
-```java
-if (order.isDomestic()) { ... }
-```
+When there is a stable “is-a” relationship, callers can rely on a shared contract, and subclasses honor that contract without surprise. Inheritance is not inherently wrong; using it to encode every combination of unrelated options is the problem.
 
-This is better because it expresses intent and reduces knowledge leakage. A wrapper method is useful only when it clarifies domain meaning; a reteaching of getters without meaning is just shallow indirection.
+## 4. A refactor replaces a long object chain with a method that just forwards getters. Did it help?
 
-## 6. How do these principles conflict with each other?
+### Interviewer
 
-### Answer
+A service previously read `order.getCustomer().getAddress().getCountry().getCode()`. It now calls `order.countryCode()`, which simply returns the same nested field. Is this a useful application of the Law of Demeter?
 
-They often do, and that is expected. That is why we should think in terms of trade-offs, not strict doctrine.
+### Strong answer
 
-For example:
-- DRY may push us to extract a shared helper, but KISS may say the actual rules are different and should stay separate.
-- YAGNI may discourage a plugin system, but a well-justified extension point can make future work cheaper.
-- Composition can improve flexibility, but inheritance can be clearer when there is a real subtype hierarchy.
+Not necessarily. The new method hides the traversal at the call site, but if it only forwards data and adds no meaningful contract, it may just move the coupling. I would ask what the caller is trying to decide.
 
-The right answer is not “always choose the principle with the most popular slogan.” It is to evaluate the maintenance cost and the actual change pressure. If a principle creates more complexity than it removes, it is not the right design.
+If the business question is whether the order is domestic, an operation such as `order.isDomestic()` may express intent and keep the decision near the data it depends on. If several consumers need the country code as data, a well-defined value object or query boundary may be more appropriate.
 
-## 7. How would you defend a design decision in an interview?
+The Law of Demeter is a guide to reducing unnecessary knowledge of collaborators, not a ban on navigation or a requirement to wrap every getter. A method should clarify ownership or intent, not merely conceal syntax.
 
-### Answer
+## 5. A legacy service needs a production change next week. Do you refactor it first?
 
-I would explain the actual trade-off in terms of maintenance cost and domain meaning. For example:
+### Interviewer
 
-- “I did not extract this helper because the formulas are the same only superficially; the rounding policy differs, so unifying them would hide a real business decision.”
-- “I used composition here because the variation is across independent dimensions, and a subclass tree would explode combinatorially.”
-- “I kept this extension point small because the requirement is real, but I did not add the full plugin framework because no second implementation exists yet.”
+The only code that handles refunds is a large service with little test coverage. A new partial-refund requirement is urgent. How do you balance delivery and design quality?
 
-Strong interview answers tie the design choice to concrete costs: duplication, coupling, changing requirements, or subclass explosion.
+### Strong answer
 
-## 8. What is a good interview summary of the design principles?
+I would first clarify the refund rules and failure cases, then trace the existing behavior and identify what must remain compatible. I would add focused characterization tests around the current refund path, including the financial boundaries and relevant failure behavior, before changing it.
 
-### Answer
+I would then make the smallest refactor needed to implement the partial-refund rule safely. I would not rewrite the whole service or extract every responsibility under deadline pressure. The change should be reviewable, observable in production, and covered by tests for both the new behavior and existing full refunds.
 
-The principles are guardrails for reducing accidental complexity, not rigid laws. DRY prevents repeated facts, KISS keeps the design understandable, YAGNI avoids speculative build-up, composition handles real variation without brittle inheritance, and Law of Demeter reduces coupling through object graph knowledge.
+If the tests expose a serious existing risk, I would surface it and discuss scope rather than silently expanding the change. Design principles should make delivery safer, not become a reason to block a necessary fix.
 
-A good senior-engineering answer is this:
+## 6. DRY and KISS point in different directions. How do you choose?
 
-“I look for the simplest design that preserves the invariant and reduces future maintenance cost. I do not add abstractions for their own sake, and I do not avoid abstractions when they truly remove duplication or dangerous coupling.”
+### Interviewer
+
+Two validation flows have about 80% identical code. One serves consumer signups; the other serves business accounts. A shared helper would need several flags and callbacks. What would you do?
+
+### Strong answer
+
+I would identify what knowledge is shared and how independently the flows change. If the common code represents one invariant, I would extract that invariant behind a clear API and leave flow-specific policy at the call site. If the similarities are incidental and the helper needs many flags, keeping the flows separate may be simpler and safer.
+
+I would also consider the cost of future fixes: duplicated invariant logic can drift, while a parameterized helper can obscure important differences. Tests should make each flow's behavior visible whichever design we choose.
+
+The 80% figure alone does not determine the answer. I care more about whether the same rule has one source of truth and whether the abstraction makes the remaining variation easier to understand.
+
+## 7. A team wants a plugin system because a second integration may arrive. What evidence would you ask for?
+
+### Interviewer
+
+There is one shipping provider. A proposed design adds a provider registry, dynamic loading, versioned plugin contracts, and per-tenant routing because another provider “might” be needed. How would you evaluate it?
+
+### Strong answer
+
+I would ask whether a second provider is committed, what differences it introduces, who configures provider selection, and whether tenants need different providers. If the requirement is only a possibility, I would avoid the dynamic plugin system. A narrow integration boundary can still keep provider details from spreading without building discovery and lifecycle machinery.
+
+If multiple providers are a confirmed requirement, I would design the selection, configuration, failure semantics, and rollout behavior explicitly. A registry may be appropriate, but dynamic loading and per-tenant routing need separate justification.
+
+YAGNI helps defer speculative capability; it does not mean making today's integration impossible to replace. The goal is to pay for the smallest seam that addresses real change pressure.
+
+## 8. How do you defend a design when an interviewer challenges your abstraction?
+
+### Interviewer
+
+You split a service into several collaborators. The interviewer says it is over-engineered and asks why it could not stay as one class. How do you respond?
+
+### Strong answer
+
+I would acknowledge the cost of the extra types, then connect each boundary to a concrete need: a different change owner, an independently tested policy, volatile infrastructure, or a failure mode that must be isolated. I would explain what simpler alternative I considered and why it was less suitable for the stated constraints.
+
+I would also be willing to revise the design. If a collaborator has one trivial implementation, no independent contract, and no meaningful testing or change benefit, I would consider folding it back in. The number of abstractions is not a measure of design quality.
+
+A concise answer is: “I chose this boundary because it reduces a specific maintenance or operational risk. If that risk is not expected, the simpler design is preferable.”
+
+## Interview answer checklist
+
+- Clarify the requirement and what is already true in production.
+- Separate shared business knowledge from code that only looks similar.
+- Propose the smallest change that addresses an observed cost or risk.
+- Explain the trade-off, including migration and failure behavior when relevant.
+- State what evidence would make you choose the simpler or more extensible design.
