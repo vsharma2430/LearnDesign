@@ -270,6 +270,18 @@ class Square extends Rectangle {
 
 ## 8. Relationship selection cheat sheet
 
+The diagram summarizes the UML notation and the kind of connection each relationship represents:
+
+```mermaid
+classDiagram
+    Doctor -- Patient : association
+    Team o-- Player : aggregation
+    Order *-- LineItem : composition
+    ReportGenerator ..> Clock : dependency
+    CsvExporter ..|> Exporter : realization
+    Dog --|> Animal : generalization
+```
+
 Use this quick checklist:
 
 - If objects can exist independently and are linked as peers: Association.

@@ -25,33 +25,23 @@ A class diagram shows static structure: classes, key attributes, operations, and
 
 ### Example
 
-```text
-+---------------------+
-| Customer            |
-|---------------------|
-| id: String          |
-| name: String        |
-+---------------------+
-          1
-          |
-          |
-          *
-+---------------------+
-| Order               |
-|---------------------|
-| orderId: String     |
-| total: Money        |
-| place()             |
-+---------------------+
-          1
-          |
-          *
-+---------------------+
-| OrderLine           |
-|---------------------|
-| quantity: int       |
-| price: Money        |
-+---------------------+
+```mermaid
+classDiagram
+    class Customer {
+        +String id
+        +String name
+    }
+    class Order {
+        +String orderId
+        +Money total
+        +place()
+    }
+    class OrderLine {
+        +int quantity
+        +Money price
+    }
+    Customer "1" --> "0..*" Order : places
+    Order "1" *-- "1..*" OrderLine : contains
 ```
 
 This communicates that a customer can place many orders, and each order contains multiple order lines. The relationships tell us something important about life cycle and ownership.
@@ -88,18 +78,23 @@ A use case diagram focuses on user goals and system boundaries. It is excellent 
 
 ### Example
 
-```text
-+------------------------+
-| Library Management     |
-| System                 |
-+------------------------+
-       ^                  ^
-       |                  |
-  [Member]        [Librarian]
-       |                  |
-       +-- BorrowBook -----+
-       +-- ReturnBook ------+
-       +-- ReserveBook -----+
+```mermaid
+flowchart LR
+    member[Member]
+    librarian[Librarian]
+
+    subgraph library["Library Management System"]
+        borrow((Borrow book))
+        return((Return book))
+        reserve((Reserve book))
+    end
+
+    member --- borrow
+    member --- return
+    member --- reserve
+    librarian --- borrow
+    librarian --- return
+    librarian --- reserve
 ```
 
 This clarifies goals without diving into the internal sequence of actions. It answers “what should the system do for whom?”
@@ -128,20 +123,27 @@ A sequence diagram shows interactions over time. It is best for one scenario: �
 
 ### Example
 
-```text
-Customer -> OrderService: submitOrder(cart)
-OrderService -> InventoryService: reserveItems(cart)
-InventoryService --> OrderService: success
-OrderService -> PaymentGateway: authorize(payment)
-alt payment approved
-    PaymentGateway --> OrderService: approved
-    OrderService -> OrderRepository: save(order)
-    OrderRepository --> OrderService: saved
-    OrderService --> Customer: order confirmed
-else payment denied
-    PaymentGateway --> OrderService: declined
-    OrderService --> Customer: payment failed
-end
+```mermaid
+sequenceDiagram
+    actor Customer
+    participant OrderService
+    participant InventoryService
+    participant PaymentGateway
+    participant OrderRepository
+
+    Customer->>OrderService: submitOrder(cart)
+    OrderService->>InventoryService: reserveItems(cart)
+    InventoryService-->>OrderService: success
+    OrderService->>PaymentGateway: authorize(payment)
+    alt payment approved
+        PaymentGateway-->>OrderService: approved
+        OrderService->>OrderRepository: save(order)
+        OrderRepository-->>OrderService: saved
+        OrderService-->>Customer: order confirmed
+    else payment denied
+        PaymentGateway-->>OrderService: declined
+        OrderService-->>Customer: payment failed
+    end
 ```
 
 This explains the scenario clearly without over-committing to a class model. It exposes the decision point: whether payment is approved or declined.
@@ -175,23 +177,16 @@ An activity diagram shows workflow logic: actions, decisions, concurrency, and p
 
 ### Example
 
-```text
-[Start]
-   |
-   v
-Submit vacation request
-   |
-   v
-Manager approval?
-   |-- no --> Reject request
-   |
-   |-- yes --> HR approval?
-                  |-- no --> Reject request
-                  |
-                  |-- yes --> Reserve leave
-                              |
-                              v
-                           [End]
+```mermaid
+flowchart TD
+    start([Start]) --> submit[Submit vacation request]
+    submit --> manager{Manager approval?}
+    manager -- No --> reject[Reject request]
+    manager -- Yes --> hr{HR approval?}
+    hr -- No --> reject
+    hr -- Yes --> reserve[Reserve leave]
+    reject --> finish([End])
+    reserve --> finish
 ```
 
 This communicates the workflow logic, not the object-level messaging.
@@ -212,18 +207,14 @@ An object diagram is a snapshot of specific instances and links. It is a concret
 
 ### Example
 
-```text
-customer: Customer
-  id = "C-101"
-  name = "Ava"
+```mermaid
+flowchart LR
+    customer["customer: Customer<br/>id = C-101<br/>name = Ava"]
+    order["order: Order<br/>orderId = O-204<br/>total = 45.00"]
+    line1["line1: OrderLine<br/>quantity = 2<br/>price = 12.50"]
 
-order: Order
-  orderId = "O-204"
-  total = 45.00
-
-line1: OrderLine
-  quantity = 2
-  price = 12.50
+    customer --> order
+    order --> line1
 ```
 
 Relationships are shown as object links, not generic types:
@@ -248,12 +239,15 @@ A state diagram focuses on a single object's lifecycle. It shows states, transit
 
 ### Example
 
-```text
-[New] --createOrder--> [Pending]
-[Pending] --paymentAuthorized--> [Paid]
-[Pending] --paymentDeclined--> [Rejected]
-[Paid] --ship--> [Shipped]
-[Shipped] --deliver--> [Delivered]
+```mermaid
+stateDiagram-v2
+    [*] --> New
+    New --> Pending : createOrder
+    Pending --> Paid : paymentAuthorized
+    Pending --> Rejected : paymentDeclined
+    Paid --> Shipped : ship
+    Shipped --> Delivered : deliver
+    Delivered --> [*]
 ```
 
 A guard might be: only transition from `Pending` to `Paid` if payment authorization succeeds. That makes the invalid transition explicit rather than implicit.
@@ -274,16 +268,10 @@ A component diagram shows larger implementation units and their dependencies. It
 
 ### Example
 
-```text
-+------------------+       provides        +------------------+
-| Order API        | ----------------------> | Order Service    |
-+------------------+                         +------------------+
-                                                  |
-                                                  | depends on
-                                                  v
-                                         +------------------+
-                                         | Inventory Client |
-                                         +------------------+
+```mermaid
+flowchart LR
+    api[Order API] -->|delegates to| service[Order Service]
+    service -->|uses| inventory[Inventory Client]
 ```
 
 This is useful when discussing how a system is partitioned. It is often used in design reviews or high-level architecture discussions where the issue is dependency direction and service boundaries.
