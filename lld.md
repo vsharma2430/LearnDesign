@@ -1,4 +1,4 @@
-1. # Low-Level Design (LLD) Roadmap
+# Low-Level Design (LLD) Roadmap
 
 This document covers the core topics and interview themes for Low-Level Design preparation.
 
