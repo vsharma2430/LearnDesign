@@ -33,7 +33,7 @@ Example:
 
 ```java
 class Doctor {
-    private Patient currentPatient;
+    private List<Patient> patients;
 }
 
 class Patient {
@@ -41,7 +41,14 @@ class Patient {
 }
 ```
 
-A doctor may treat many patients, and a patient may have one doctor. But a doctor is not “made of” patients, and a patient is not “owned by” a doctor in the strong sense. The link exists because the domain says they are related.
+A doctor may treat many patients, and a patient may have one primary-care doctor. Either object can exist without the other: changing a patient's doctor does not delete the patient, and a doctor remains even when their patient list changes. The link exists because the domain says they are related.
+
+```mermaid
+classDiagram
+    Doctor "0..1" -- "0..*" Patient : treats / primary care
+```
+
+The multiplicities describe the domain rule at each end: a doctor can be linked to zero or many patients, while a patient has zero or one primary-care doctor. If the application also models specialists, represent those links separately rather than silently changing the meaning of `primaryCareDoctor`.
 
 ### When association fits
 
@@ -73,7 +80,14 @@ class Player {
 }
 ```
 
-A team contains players, but players could transfer to another team, join a different squad, or be stored in another context. The team is a container, not the owner of the player's identity.
+A team contains players, but players could transfer to another team, join a different squad, or be stored in another context. The team is a container, not the owner of the player's identity. In an implementation, removing a player from a team should remove the membership link; it should not delete the player record.
+
+```mermaid
+classDiagram
+    Team "0..1" o-- "0..*" Player : roster
+```
+
+Here the hollow diamond is on the whole (`Team`). The `0..1` multiplicity means a player is on at most one team in this particular model; if the domain allows multiple teams, change that constraint instead of changing aggregation semantics.
 
 ### How to tell aggregation from association
 
@@ -117,10 +131,19 @@ class Order {
 class LineItem {
     private String sku;
     private int quantity;
+    private Money unitPrice;
 }
 ```
 
-An order owns its line items. If the order is deleted, the line items vanish with it. In many business systems, a line item is meaningful only as part of the order.
+An order owns its line items. If the order is deleted, the line items vanish with it. In many business systems, a line item is meaningful only as part of the order. The order can create a line item when an item is added, calculate its total from those items, and remove an item when the order is edited. The catalog product identified by `sku` is not owned by the order; only the order-specific quantity and price snapshot belong to the line item.
+
+```mermaid
+classDiagram
+    Order "1" *-- "1..*" LineItem : owns
+    LineItem ..> Product : identifies by SKU
+```
+
+The composition applies to `Order` and `LineItem`; the dashed dependency to `Product` illustrates that a line item may refer to a separately managed catalog concept without owning its lifecycle. If drafts with no items are valid, use `0..*` instead of `1..*`.
 
 ### Why composition matters
 
@@ -153,7 +176,13 @@ class ReportGenerator {
 }
 ```
 
-The `ReportGenerator` relies on a `Clock` while generating a report. It does not necessarily hold a permanent `Clock` field. The dependency is about a single operation.
+The `ReportGenerator` relies on a `Clock` while generating a report. It does not necessarily hold a permanent `Clock` field. The dependency is about a single operation. For example, a caller can pass a fixed clock to create a reproducible report for a historical date, while production passes a system clock. When the call finishes, the generator need not retain either clock or user.
+
+```mermaid
+classDiagram
+    ReportGenerator ..> Clock : uses during generateReport()
+    ReportGenerator ..> User : reads report subject
+```
 
 ### Dependency vs association
 
@@ -196,7 +225,20 @@ class CsvExporter implements Exporter {
 }
 ```
 
-The class implements the contract, and callers can depend on the interface instead of the implementation.
+The class implements the contract, and callers can depend on the interface instead of the implementation. A registry can select `CsvExporter` or `JsonExporter` from configuration, while a report service calls only `Exporter.export(path)`. Adding a new format then adds another implementation without requiring the caller to know its concrete type.
+
+```mermaid
+classDiagram
+    class Exporter {
+        <<interface>>
+        +export(path)
+    }
+    class CsvExporter
+    class JsonExporter
+    CsvExporter ..|> Exporter
+    JsonExporter ..|> Exporter
+    ReportService ..> Exporter : invokes
+```
 
 ### Why this matters
 
@@ -228,7 +270,24 @@ class Dog extends Animal {
 }
 ```
 
-This is valid because a `Dog` is an `Animal` and can satisfy the `Animal` contract.
+This is valid because a `Dog` is an `Animal` and can satisfy the `Animal` contract. Code that accepts an `Animal` can call `sound()` without checking whether the instance is a dog or another supported animal. If a subclass cannot honor a base operation's promised behavior, the hierarchy is not a valid generalization even if the types share implementation.
+
+```mermaid
+classDiagram
+    class Animal {
+        <<abstract>>
+        +sound()
+    }
+    class Dog {
+        +sound()
+    }
+    class Cat {
+        +sound()
+    }
+    Dog --|> Animal
+    Cat --|> Animal
+    AnimalShelter ..> Animal : accepts any subtype
+```
 
 ### When inheritance is appropriate
 
@@ -291,7 +350,20 @@ Use this quick checklist:
 - If a class is a concrete implementation of a contract: Realization.
 - If a subclass is a real subtype under the base contract: Generalization.
 
-## 9. Coupling and design quality
+## 9. Comparison of relationship types
+
+| Relationship | UML notation | What it communicates | Typical code clue | Example |
+|---|---|---|---|---|
+| Association | Solid line (`A -- B`); multiplicities may be shown | A lasting domain link; neither side necessarily owns the other | One or both classes retain references to the other | `Doctor` treats `Patient` |
+| Aggregation | Solid line with hollow diamond at the whole (`Whole o-- Part`) | A whole/part grouping whose parts can exist independently or be reassigned | A collection of independently managed objects | `Team` has a roster of `Player` objects |
+| Composition | Solid line with filled diamond at the owner (`Whole *-- Part`) | Strong whole/part ownership; the part's lifecycle is bound to the whole in this model | Parent creates/removes children and controls their lifecycle | `Order` owns its `LineItem` objects |
+| Dependency | Dashed arrow from user to supplier (`User ..> Supplier`) | Temporary use; changes to the supplier may affect the user | A parameter, local variable, return type, or method call, without a lasting field link | `ReportGenerator` uses `Clock` during generation |
+| Realization / implementation | Dashed line with hollow triangle pointing to the contract (`Implementation ..|> Interface`) | A class fulfills an interface or abstract contract | `class CsvExporter implements Exporter` | `CsvExporter` realizes `Exporter` |
+| Generalization / inheritance | Solid line with hollow triangle pointing to the parent (`Subtype --|> Base`) | An “is-a” subtype relationship with substitutable behavior | `class Dog extends Animal` | `Dog` is an `Animal` |
+
+The first three are structural links between domain objects, dependency emphasizes temporary use, and the final two describe types and contracts. Association, aggregation, and composition all use a solid line; the diamond and lifecycle assumptions distinguish the two whole/part forms. A UML symbol is not proof that the implementation enforces the lifecycle—confirm that in the code and domain rules.
+
+## 10. Coupling and design quality
 
 Relationships affect coupling.
 
@@ -301,7 +373,7 @@ Relationships affect coupling.
 
 The goal is not to maximize the number of “beautiful” relationships. It is to make the domain model honest: who owns what, how long it lasts, and what contract is actually being relied on.
 
-## 10. Rule of thumb for interviews
+## 11. Rule of thumb for interviews
 
 A strong answer sounds like this:
 
