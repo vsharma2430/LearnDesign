@@ -52,7 +52,7 @@ A strong answer is: “I prefer the smallest seam that supports the real expecte
 
 LSP matters because it tells us whether a subtype can safely substitute for its base type without surprising the caller. If a subclass violates the base contract, the design becomes brittle.
 
-For example, if `List` says `add` should insert an element, but a `ReadOnlyList` throws, then the subtype is not substitutable. The caller expects a standard list contract and gets a behavior that violates the promise.
+For example, if `MutablePlaylist` promises that `add` inserts a song, but a `ReadOnlyPlaylist` subtype throws, then the subtype is not substitutable. The caller expects the parent contract and gets a behavior that violates the promise.
 
 This is not just theoretical. It breaks assumptions in validation, testing, and program flow. A system that depends on substitutability becomes fragile if subclasses silently weaken guarantees or strengthen preconditions.
 

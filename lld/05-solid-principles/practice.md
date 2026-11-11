@@ -47,22 +47,19 @@ A `switch` is still acceptable when:
 - the behavior is trivial and centralized
 - adding an abstraction would make the code harder to understand
 
-## 3) LSP — `ReadOnlyList`
+## 3) LSP — `ReadOnlyPlaylist`
 
-A `ReadOnlyList` subtype throws from `add`. Analyze the client expectation and explain the LSP issue.
+A `ReadOnlyPlaylist` subtype throws from `add`, even though its parent `MutablePlaylist` promises that songs can be added. Analyze the client expectation and explain the LSP issue.
 
 ### Sample answer
 
-Clients expect a list to support the standard `add` contract because they are using the base type or abstraction. If a `ReadOnlyList` inherits from `List` but throws on `add`, then it violates the same contract as the parent.
+Clients using `MutablePlaylist` can reasonably call `add`. If a `ReadOnlyPlaylist` inherits from it but throws on that operation, it violates the parent contract and cannot safely replace the parent.
 
-This breaks substitutability: a caller using a `List` cannot safely rely on the subtype behaving like the underlying abstraction. The subtype unexpectedly strengthens preconditions or changes semantics.
+This breaks substitutability: the subtype unexpectedly rejects a valid operation, effectively strengthening the precondition callers must satisfy.
 
-The fix is either:
+The fix is to separate the read-only and mutable contracts. For example, clients that only need to view songs can depend on `PlaylistView`, while clients that add songs depend on `EditablePlaylist`, which extends that view.
 
-- make the type not inherit from `List` if it is genuinely read-only
-- or use a different abstraction such as `ReadOnlyCollection` / `Collection` with no mutating methods
-
-In other words, a subtype must not restrict behavior beyond what the base contract promises.
+In other words, model read-only behavior with an abstraction that does not promise mutation; do not inherit from a mutable contract and then disable its operations.
 
 ## 4) ISP — `Worker` interface
 
