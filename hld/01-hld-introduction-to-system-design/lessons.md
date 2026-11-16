@@ -9,30 +9,30 @@
 
 ## 1) What is System Design?
 
-System design is the process of defining the architecture, components, interfaces, data flow, and operational constraints of a software system so that it can meet business and technical requirements at scale.
+System design is the process of defining a software system’s architecture, components, interfaces, data flow, and operational constraints so it can satisfy both business and technical requirements at scale.
 
-In simple terms, if software development answers "How do we build this feature?", system design answers "How do we build a system that can support millions of users, remain available, respond fast, and keep evolving without breaking?"
+In simple terms: software development asks, "How do we build this feature?" System design asks, "How do we build a system that can handle growth, failures, and real-world traffic without breaking?"
 
 ### Why system design matters
 
-Every software product eventually needs to handle:
+A feature can work in a demo and still fail in production if the system is not designed for reality. Real systems must handle:
 - more users
 - more requests
 - more data
 - more failure modes
 - more teams working in parallel
 
-A feature that works in a local demo can still fail in production if there is no plan for:
+Common production problems include:
 - traffic spikes
 - database bottlenecks
 - retries and timeouts
-- data consistency
-- observability
-- scale-out architecture
+- consistency issues
+- lack of observability
+- poor scale-out architecture
 
 ### Core goals of a good system design
 
-A system is considered strong when it balances several goals:
+A strong system balances several goals:
 
 - Functional correctness: Does it do the required job?
 - Scalability: Can it handle growth in users, requests, or data?
@@ -45,7 +45,7 @@ A system is considered strong when it balances several goals:
 
 ### Example: a simple e-commerce checkout system
 
-If you design an online shopping platform, you are not only thinking about a checkout button. You need to think about:
+Designing an online shopping platform is not just about a checkout button. You need to think about:
 - customer requests reaching the app
 - authentication and session handling
 - inventory checks
@@ -58,14 +58,14 @@ This is system design in action.
 
 ### The big idea: design for uncertainty
 
-Real production systems face unpredictable traffic patterns and failures. A good design does not assume everything always works perfectly. It assumes:
+Production systems face unpredictable traffic and failures. A good design does not assume everything works perfectly. It assumes:
 - servers crash
 - networks fail
-- databases get slow
+- databases slow down
 - queues back up
 - users retry requests
 
-Therefore, system design is about building resilient, scalable, and observable systems, not just “working code.”
+That is why system design focuses on resilient, scalable, and observable systems rather than only “working code.”
 
 ### Mermaid diagram: high-level system design flow
 
@@ -93,7 +93,7 @@ System design is the bridge between a product idea and a production-ready archit
 
 ### Practice angle
 
-When asked in interviews, do not start with a huge architecture diagram. Start with:
+When asked in interviews, do not begin with a large architecture diagram. Start with:
 1. Clarify requirements
 2. Define constraints and assumptions
 3. Estimate scale
@@ -206,15 +206,15 @@ System design interviews are not just about “drawing boxes.” They test clari
 
 ### What interviewers look for
 
-A strong system design answer usually demonstrates:
+A strong system design answer usually shows:
 
-- Requirement clarification: listening carefully and asking the right questions
-- Structured thinking: breaking a complex problem into parts
-- Clear trade-off reasoning: explaining why one choice is better than another
-- Scalability awareness: thinking beyond a single server
-- Data and storage decisions: choosing the right DB or patterns
-- Failure awareness: discussing how the system behaves under errors
-- Communication skills: explaining the design in a way that is easy to follow
+- requirement clarification: asking the right questions early
+- structured thinking: breaking a complex problem into manageable parts
+- trade-off reasoning: explaining why one choice is better than another
+- scalability awareness: thinking beyond a single server
+- storage judgment: choosing the right database or access pattern
+- failure awareness: discussing what happens when parts break
+- communication: explaining the design clearly and in order
 
 ### Typical evaluation rubric
 
@@ -232,7 +232,7 @@ A good interviewer may score you on several dimensions:
    - Do you consider traffic growth, read/write patterns, and latency?
 
 4. Data modeling and storage
-   - Do you pick storage strategies based on access patterns?
+   - Do you choose storage based on access patterns?
    - Are you aware of SQL vs NoSQL trade-offs?
 
 5. Reliability and resilience
@@ -242,11 +242,11 @@ A good interviewer may score you on several dimensions:
    - Do you explain what you are optimizing for and what you are sacrificing?
 
 7. Communication and structure
-   - Can you explain the design in a crisp step-by-step manner?
+   - Can you explain the design in a crisp, step-by-step way?
 
 ### Common interview flow
 
-Most system design interviews follow this pattern:
+Most system design interviews follow a similar pattern:
 
 1. Requirement clarification
    - What is the product?
@@ -263,7 +263,7 @@ Most system design interviews follow this pattern:
    - Choose the most important component and design it in detail
 
 5. Bottleneck analysis
-   - Identify the strongest constraints and how to solve them
+   - Identify the main constraints and how to solve them
 
 6. Trade-offs and improvements
    - Explain alternatives and why they are or are not chosen
@@ -278,17 +278,17 @@ If the problem is “Design a URL shortener,” an interviewer may expect discus
 - rate limiting and abuse prevention
 - analytics and link expiration policies
 
-They are not necessarily asking for a perfect production architecture. They want to see if you can reason under constraints.
+They are not asking for a perfect production architecture. They want to see whether you can reason under constraints and make sensible trade-offs.
 
 ### The most important mindset
 
-A strong candidate does not try to impress with obscure buzzwords. They focus on:
+A strong candidate does not try to impress with buzzwords. They focus on:
 - clarity
 - prioritization
 - trade-offs
 - reasoning
 
-Bad answers often sound impressive but fail in fundamentals. Example issues:
+Weak answers often sound impressive but fail on fundamentals. Common mistakes include:
 - jumping directly to microservices for a tiny app
 - ignoring bottlenecks and single points of failure
 - using overly complex patterns without need
@@ -320,84 +320,7 @@ In short, system design interviews are designed to test whether you can think li
 
 ---
 
-## Practice Questions & Answers
-
-### Q1. What is the difference between a system that works and a system that is well-designed?
-
-Answer:
-A system that works only satisfies the immediate functional requirement. A well-designed system also handles changing traffic, failures, growth, and operational complexity. The difference is that a well-designed system is resilient, scalable, observable, and maintainable.
-
-Example: A backend that stores user records in a single database and handles 100 users might work. But it will not scale to millions of users without replication, sharding, caching, backups, and monitoring.
-
-### Q2. Why is requirement clarification important before designing a system?
-
-Answer:
-Most bad designs come from making assumptions too early. Clarifying requirements prevents you from building the wrong system. You need to know:
-- expected read/write traffic
-- latency sensitivity
-- data durability expectations
-- consistency needs
-- security constraints
-- whether the goal is to optimize cost, speed, or reliability
-
-If you do not clarify these upfront, your design may optimize for the wrong things.
-
-### Q3. What is a Single Point of Failure (SPOF)?
-
-Answer:
-A SPOF is any component whose failure causes the entire system to fail or become unavailable. Examples include a single database instance, one load balancer, or one payment service without failover.
-
-A good system design removes or reduces SPOFs using redundancy, replication, health checks, failover, and distributed patterns.
-
-### Q4. Why do system design interviews care about trade-offs?
-
-Answer:
-There is no universally perfect architecture. A design that is highly consistent may be slower or more expensive. A design that is highly available may sacrifice some consistency during failures. Interviewers want to see if you understand these trade-offs and can justify them based on the use case.
-
-Example: A banking app prioritizes consistency and correctness; a social media feed may prioritize availability and fast reads.
-
-### Q5. What is the first thing you should do when solving a system design problem?
-
-Answer:
-Start by clarifying the problem and setting scope.
-
-A good first response is:
-- What are the core user actions?
-- Is the system read-heavy or write-heavy?
-- What is the expected scale?
-- Are there latency requirements?
-- Is consistency critical?
-
-This helps anchor the design and avoids building a system for the wrong workload.
-
-### Q6. How does HLD differ from LLD in a real project?
-
-Answer:
-HLD describes the building blocks of the system at a high level. LLD describes how each block is implemented. In a real project:
-- HLD decides the services, storage choices, communication patterns, and deployment model
-- LLD decides the data structures, schemas, algorithms, class responsibilities, code flow, and validation logic
-
-A team can have a good HLD but still build a poor feature if the LLD is weak.
-
-### Q7. Why do interviewers ask about scalability even in beginner interviews?
-
-Answer:
-Because real systems do not stay small forever. Without discussing scale, you cannot evaluate whether the architecture will remain practical as user demand grows.
-
-Interviewers want to see if you understand concepts like:
-- load balancing
-- caching
-- replication
-- partitioning
-- queue-based processing
-- autoscaling
-
-### Q8. What is the most common mistake candidates make in system design interviews?
-
-Answer:
-They start designing too quickly and never clarify assumptions. Another common mistake is drawing architecture without considering bottlenecks, failure modes, or trade-offs.
-
-The best candidates keep the design simple at first, then add complexity only when needed.
+For additional interview-style practice questions, refer to [practice.md](./practice.md).
 
 ---
 

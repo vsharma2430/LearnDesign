@@ -1,6 +1,6 @@
 # Networking Fundamentals
 
-Networking is the path a request takes between a client and a service. In system design, understanding that path helps explain latency, capacity, failure modes, security boundaries, and how to diagnose production issues. The topics below connect protocol fundamentals to practical architecture decisions.
+Networking is the path a request takes between a client and a service. In system design, understanding that path helps explain latency, capacity, failure modes, security boundaries, and how to diagnose production issues. The topics below connect protocol fundamentals to practical architecture decisions and make trade-offs easier to reason about.
 
 ## 1) OSI Model
 
@@ -35,7 +35,7 @@ The model is especially useful as a troubleshooting checklist. A DNS lookup or H
 
 An Internet Protocol (IP) address identifies a network interface for packet routing. IPv4 uses 32-bit addresses, commonly written as four decimal octets (for example, `192.0.2.10`). IPv6 uses 128-bit addresses, written in hexadecimal groups, and provides a vastly larger address space.
 
-An IP address is interpreted with a network prefix. The prefix length indicates which bits identify the network and which identify a host. For example, `192.0.2.0/24` represents a network whose first 24 bits are the prefix. Routers use prefixes to choose where to forward packets; they do not normally use application concepts such as a URL path.
+An IP address is interpreted together with a network prefix. The prefix length indicates which bits identify the network and which identify the host. For example, `192.0.2.0/24` represents a network whose first 24 bits are the prefix. Routers use prefixes to choose where to forward packets; they do not normally use application concepts such as a URL path.
 
 Addresses are commonly described as:
 
@@ -56,11 +56,11 @@ flowchart LR
 
 ## 3) TCP vs UDP
 
-TCP and UDP are transport protocols that deliver data between processes identified by IP address and port.
+TCP and UDP are transport protocols that deliver data between processes identified by an IP address and port.
 
-**TCP (Transmission Control Protocol)** establishes a connection and provides an ordered byte stream. It detects loss, retransmits missing data, and uses flow and congestion control. Applications read a stream of bytes, not a sequence of application messages, so protocols such as HTTP define how messages are framed. TCP is a good fit when reliable, ordered delivery is important, such as database connections and many web requests.
+**TCP (Transmission Control Protocol)** establishes a connection and provides an ordered byte stream. It detects loss, retransmits missing data, and uses flow and congestion control. Applications read a stream of bytes, not a sequence of application messages, so protocols such as HTTP define how messages are framed. TCP is a good fit when reliable, ordered delivery matters, such as database connections and many web requests.
 
-**UDP (User Datagram Protocol)** sends independent datagrams without establishing a transport connection. It does not guarantee delivery, ordering, or retransmission. This reduces protocol overhead and lets applications choose their own recovery behavior. DNS queries, some real-time media, and latency-sensitive protocols may use UDP; applications must tolerate loss or provide needed reliability themselves. QUIC, used by HTTP/3, runs over UDP but implements reliability and congestion control at the transport layer.
+**UDP (User Datagram Protocol)** sends independent datagrams without establishing a transport connection. It does not guarantee delivery, ordering, or retransmission. This reduces protocol overhead and lets applications choose their own recovery behavior. DNS queries, some real-time media, and latency-sensitive protocols may use UDP; applications must tolerate loss or provide reliability themselves. QUIC, used by HTTP/3, runs over UDP but implements reliability and congestion control at the transport layer.
 
 | Property | TCP | UDP |
 |---|---|---|
@@ -94,6 +94,9 @@ sequenceDiagram
 
 DNS maps names such as `api.example.com` to records used to locate services. It is a distributed, hierarchical naming system: a recursive resolver looks up answers from authoritative servers and can cache them for the record's time to live (TTL).
 
+- **Recursive resolver:** a DNS server that resolves names on behalf of a client. It checks its cache first and then follows referrals through the DNS hierarchy until it reaches the answer. In simple terms, it is the DNS server that “does the lookup work” for you.
+- **Authoritative DNS:** a DNS server that holds the official records for a domain. It is the source of truth for records such as A, AAAA, MX, and CNAME. In simple terms, it is the server that says, “This is the real answer for this domain.”
+
 A typical lookup works as follows:
 
 1. The client checks its local cache and configured resolver.
@@ -119,9 +122,29 @@ DNS resolution and connecting to the returned address are separate steps. A succ
 
 ## 6) TLS Handshake Overview
 
-TLS (Transport Layer Security) provides confidentiality, integrity, and usually server authentication for a connection. In a simplified handshake, the client and server agree on protocol parameters and cryptographic algorithms, the server presents a certificate, the client verifies that the certificate is valid for the requested hostname and trusted chain, and both sides derive session keys. Subsequent application data is encrypted and integrity-protected.
+TLS (Transport Layer Security) is the protocol that secures connections such as HTTPS. It gives you three important guarantees: confidentiality, integrity, and authentication. In plain English, TLS helps ensure that a third party cannot read the traffic, cannot silently modify it, and cannot pretend to be the service you intended to reach.
 
-Modern TLS commonly uses ephemeral key agreement so that compromise of a server's long-term certificate key does not necessarily reveal previously captured sessions (forward secrecy). Exact handshake messages vary by TLS version and configuration; TLS 1.3 streamlined the handshake compared with earlier versions.
+At a high level, the TLS handshake is the process where a client and server agree on how they will communicate securely before sending actual application data. This is not just a certificate check; it is also a key-exchange process. The goal is to establish shared session keys that both parties can use for encrypted communication, while also verifying that the server is who it claims to be.
+
+### Why the handshake exists
+
+Without TLS, the network is like a postal service that lets anyone read or change the contents of a letter. TLS tries to prevent that by adding cryptographic protections on top of the transport connection. The main ideas are:
+
+- **Confidentiality:** only the sender and receiver can understand the data.
+- **Integrity:** the data cannot be altered without detection.
+- **Authentication:** the client can verify the server identity, and sometimes the server can verify the client identity.
+
+### Basic TLS flow
+
+A typical HTTPS connection starts after the underlying TCP connection is established. Then TLS begins:
+
+1. The client sends a `ClientHello` with supported protocol versions, cipher suites, and optional parameters such as the hostname it wants to reach.
+2. The server replies with a `ServerHello`, choosing a compatible TLS version and encryption settings.
+3. The server presents its certificate, which contains its public key and identity information.
+4. The client validates the certificate: it checks that the certificate is signed by a trusted certificate authority, that it is still valid, and that it matches the requested hostname.
+5. The client and server perform a key agreement process. In modern TLS, they usually use an ephemeral key exchange so that the session keys are unique to this connection rather than tied to a long-term server key.
+6. Both sides derive shared session keys from that exchange and verify the handshake completed successfully.
+7. Application data is then encrypted and integrity-protected using those session keys.
 
 ```mermaid
 sequenceDiagram
@@ -136,15 +159,56 @@ sequenceDiagram
     C->>S: Protected application data
 ```
 
-Certificate validation matters: encryption to an unauthenticated endpoint can still expose users to an impostor. Certificates expire and must be renewed; services also need safe key storage, rotation, and monitoring. TLS protects data in transit between its endpoints, not necessarily every network hop if TLS is terminated and traffic proceeds in plaintext afterward.
+### Public keys, private keys, and certificates
 
-**Operational considerations:** Handshake latency, certificate management, cipher configuration, and connection reuse affect performance and reliability. Mutual TLS adds client authentication and is often used for service-to-service identity, but it also introduces certificate lifecycle and authorization responsibilities.
+TLS uses a mix of asymmetric and symmetric cryptography:
+
+- **Asymmetric cryptography** uses a public/private key pair. The public key can be shared openly, while the private key is kept secret by the owner.
+- **Certificates** bind an identity such as `api.example.com` to a public key. They are signed by a trusted certificate authority (CA), which is why browsers trust them.
+- **Symmetric cryptography** uses the same key on both sides for efficiency. After the handshake, both sides use symmetric encryption for the actual request and response traffic.
+
+This combination is important: public-key cryptography is used to establish trust and exchange secret material, while symmetric cryptography is used to encrypt the bulk of the traffic efficiently.
+
+### Why forward secrecy matters
+
+Modern TLS commonly uses ephemeral key agreement so that even if a server’s long-term private key is later compromised, past captured sessions are not automatically exposed. This property is called **forward secrecy**. It is an important design goal for modern secure web traffic.
+
+### Certificates are not optional
+
+Certificate validation matters: encryption to an unauthenticated endpoint can still expose users to an impostor. If the certificate is expired, not trusted, or does not match the hostname, the client should reject it.
+
+Certificates also need operational care:
+
+- They expire and must be renewed before that date.
+- Private keys must be stored securely.
+- Key rotation and monitoring are required in production.
+- A certificate only proves the identity of the endpoint it covers; it does not automatically guarantee an application is safe or that the server is authorized to do everything.
+
+### Important practical note
+
+TLS protects data in transit between its endpoints, but not necessarily every network hop if TLS is terminated and traffic continues in plaintext afterward. For example, traffic may be encrypted from browser to load balancer, then decrypted and forwarded to an internal service without TLS.
+
+### Operational considerations
+
+**Handshake latency, certificate management, cipher configuration, and connection reuse affect performance and reliability.** A TLS handshake adds CPU and network round-trips, so connection reuse is important for high-traffic systems. **Mutual TLS (mTLS)** adds client authentication and is often used for service-to-service identity, but it also introduces certificate lifecycle and authorization responsibilities.
+
+### Short mental model
+
+If you want a simple way to think about TLS:
+
+- The client says, “Who are you?”
+- The server presents a certificate.
+- The client checks whether the certificate is valid and trusted.
+- Both sides agree on keys.
+- Then they send encrypted application traffic.
+
+That is the core idea behind the TLS handshake.
 
 ## 7) Checksums
 
 A checksum is a value computed from data to detect accidental changes or corruption. The receiver computes the value again and compares it with the expected checksum. Network protocols and storage systems use checksums to detect errors that can occur during transmission or persistence.
 
-Checksums are not all equivalent. A simple checksum or CRC can efficiently detect many accidental errors but is not designed to resist an attacker who deliberately changes data. Cryptographic hashes make deliberate collision or tampering harder, while a message authentication code (MAC) or digital signature can authenticate integrity against an attacker under the relevant key assumptions. TLS provides authenticated integrity for protected records, so an application should not mistake a basic checksum for security.
+Checksums are not all equivalent. A simple checksum or CRC can efficiently detect many accidental errors, but it is not designed to resist an attacker who deliberately changes data. Cryptographic hashes make collision or tampering harder, while a message authentication code (MAC) or digital signature can authenticate integrity against an attacker under the relevant key assumptions. TLS provides authenticated integrity for protected records, so an application should not mistake a basic checksum for security.
 
 ```mermaid
 flowchart LR
@@ -164,6 +228,8 @@ flowchart LR
 A **forward proxy** acts on behalf of clients. Clients send traffic through it to reach external services. It can enforce outbound policy, filter requests, cache responses, or hide client network details from destinations.
 
 A **reverse proxy** acts on behalf of servers. Clients connect to the reverse proxy, which forwards requests to backend services. Load balancers, API gateways, and web application firewalls often provide reverse-proxy behavior. The proxy can terminate TLS, route by hostname or path, apply limits, and centralize observability.
+
+A useful mental model is: a forward proxy sits on the client path; a reverse proxy sits on the server path.
 
 | Concern | Forward proxy | Reverse proxy |
 |---|---|---|
@@ -189,6 +255,8 @@ Proxies create a policy and failure boundary. They must be sized, monitored, and
 Network Address Translation (NAT) rewrites address information as packets cross a network boundary. A common use is allowing many private IPv4 devices to share a smaller set of public addresses. Port address translation distinguishes concurrent connections by mapping address-and-port combinations. NAT can affect inbound connectivity and complicate protocols that embed address information, so it should not be treated as a security control by itself.
 
 A firewall enforces traffic policy. Rules may allow or deny traffic based on addresses, ports, protocols, connection state, or—in application-aware products—higher-layer information. Stateful firewalls track active flows and permit return traffic for an allowed connection; stateless rules evaluate packets independently.
+
+In practice, NAT changes how addresses appear at a boundary, while the firewall decides what traffic is allowed to cross it.
 
 ```mermaid
 flowchart LR
@@ -265,6 +333,8 @@ Useful security-related response headers include:
 - **Referrer-Policy:** controls how much referrer information browsers send.
 - **Cache-Control:** controls caching behavior; it is also important to avoid storing sensitive responses in shared caches.
 
+These headers are helpful, but they are not a substitute for application security controls such as input validation, output encoding, and correct authorization logic.
+
 Security headers are defense in depth, not a replacement for output encoding, authorization, secure cookie attributes, or correct TLS configuration. Header behavior can vary between browsers and intermediaries, so test actual responses at the public edge.
 
 ## 13) CORS
@@ -286,7 +356,7 @@ sequenceDiagram
 
 When credentials such as cookies are included, the server must allow credentials explicitly and return a specific allowed origin; wildcard origin is not valid for credentialed access. Avoid reflecting arbitrary `Origin` values. Configure only trusted origins, methods, and headers, and use CSRF protections where cookie-based authentication is involved.
 
-## Putting the request path together
+## 14) Putting the request path together
 
 A typical browser request involves several of these topics in sequence: DNS finds an address, IP routing moves packets, TCP or QUIC carries transport data, TLS protects the connection, and HTTP expresses the request. A reverse proxy or load balancer may then route it through internal services whose network access is constrained by firewalls and private addressing.
 
