@@ -1,6 +1,6 @@
 # Low-Level Design Learning Path
 
-This directory turns the outline in [`../lld.md`](../lld.md) into a self-paced course. Each numbered module has an overview, lesson notes, and practice prompts. Work through modules in order, or use the roadmap to jump to a topic.
+This directory turns the outline in [`../topics/lld.md`](../topics/lld.md) into a self-paced course. Each numbered module has an overview, lesson notes, and practice prompts. Work through modules in order, or use the roadmap to jump to a topic.
 
 ## Modules
 
