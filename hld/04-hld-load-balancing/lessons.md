@@ -85,7 +85,7 @@ The algorithm decides which backend receives the next request. The best choice d
 | Random | Picks a server at random | Simple fallback | Very easy to implement | Unbalanced under load |
 
 ### Choosing an algorithm
-The decision is not only about fairness; it is about balancing:
+Choose based on the workload and the constraint you need to address:
 
 - traffic distribution
 - resource utilization
@@ -93,17 +93,30 @@ The decision is not only about fairness; it is about balancing:
 - session affinity requirements
 - rebalancing cost
 
+| Situation | Real-world example | Good starting choice |
+|---|---|---|
+| Servers have similar capacity and requests are short and stateless | A web tier serving mostly uniform page or API requests | Round Robin |
+| Servers have known, consistently different capacity | A larger instance can handle roughly twice the traffic of a smaller one | Weighted Round Robin |
+| Requests or connections last for very different lengths of time | A reporting API mixes quick lookups with long-running exports, or a service holds open connections | Least Connections |
+| Response latency is the main goal and backend response-time measurements are reliable | A user-facing API routes among healthy replicas with different observed response times | Least Response Time |
+| A client must keep reaching the same backend | A legacy application keeps a shopping cart in local memory | IP Hash / Client Hashing |
+
+Client hashing can create hot spots when client traffic is uneven or the backend pool changes. Prefer shared session state when possible; use affinity only when the application needs it.
+
 ```mermaid
 flowchart TD
-    Start[New Request] --> Check{Need sticky client routing?}
-    Check -->|Yes| Hash[IP Hash / Consistent Hash]
-    Check -->|No| Load{Current backend load?}
-    Load -->|Balanced| RR[Round Robin]
-    Load -->|Uneven| LC[Least Connections]
-    RR --> Route[Forward request]
-    LC --> Route
-    Hash --> Route
+    Start[Choose a starting algorithm] --> Affinity{Must a client stay on one backend?}
+    Affinity -->|Yes| Hash[Client Hashing]
+    Affinity -->|No| Capacity{Are backend capacities consistently different?}
+    Capacity -->|Yes| Weighted[Weighted Round Robin]
+    Capacity -->|No| Duration{Do requests or connections vary greatly in duration?}
+    Duration -->|Yes| Connections[Least Connections]
+    Duration -->|No| Latency{Is minimizing response time the main goal?}
+    Latency -->|Yes| Fastest[Least Response Time]
+    Latency -->|No| RoundRobin[Round Robin]
 ```
+
+Treat this as a starting point, not a substitute for measurement: compare latency, errors, and backend utilization under representative traffic, and revisit the choice as the workload changes.
 
 ### Interview insight
 Good answers mention that load balancing is not a one-size-fits-all problem. Different algorithms optimize for fairness, speed, or session consistency.
@@ -262,30 +275,52 @@ Hardware is often chosen for performance-critical, on-prem enterprise environmen
 
 ## 7) Rendezvous Hashing
 
-Rendezvous hashing, or highest-random-weight hashing (HRW), aims for stable assignment of keys to servers with minimal disruption as the cluster changes.
+Rendezvous hashing, also called highest-random-weight hashing (HRW), deterministically assigns each key to the server with the highest score. It is useful when the server pool can change but keys should keep a stable owner.
 
 | Aspect | Summary |
 |---|---|
-| Why important | Keeps most keys pinned to the same node during churn |
+| Assignment rule | Choose the server with the highest hash score for the key |
 | Best use | Cache sharding, partitioned storage, dynamic clusters |
-| Benefit | Reduces unnecessary data movement |
+| Benefit | Adding or removing a server moves only the keys whose winner changes |
 
-### Intuition
-Each server and key are assigned a score using a hash function. The key goes to the server with the highest score. When nodes change, only a subset of keys move instead of all keys.
+### How it works
+For each key, compute a score for every available server using a stable hash of the key and server ID. Assign the key to the server with the highest score. Because the scores are deterministic, the same key and server set produce the same owner wherever the algorithm runs.
 
-### Example
-If a 10-node cache loses one node, only a subset of keys is reassigned; this is much better than rehashing the entire cache and causing a large cold-miss spike.
+### How is a score calculated?
+The score is not a server's load or a value assigned manually. Hash the user key together with a unique server ID:
+
+```text
+score(user, server) = H(user_key, server_id)
+```
+
+For example, hash the pairs `(user:42, Node A)`, `(user:42, Node B)`, and `(user:42, Node C)` separately. A fixed-width hash produces an integer for each pair; compare those integers directly, or normalize them to the range `[0, 1)` for display. In the example below, the scores are illustrative normalized hash outputs, so `user:42` is assigned to Node B because `0.91` is highest. The same pair always produces the same score, while a different user or server ID produces a different score.
+
+| Key | Score on Node A | Score on Node B | Score on Node C | Owner |
+|---|---:|---:|---:|---|
+| `user:42` | 0.18 | **0.91** | 0.37 | Node B |
+| `user:73` | 0.82 | 0.24 | 0.55 | Node A |
 
 ```mermaid
-graph LR
-    K1[Key A] --> Ring[Hash Ring / Rendezvous Space]
-    K2[Key B] --> Ring
-    K3[Key C] --> Ring
-    N1[Node 1] --> Ring
-    N2[Node 2] --> Ring
-    N3[Node 3] --> Ring
-    N4[Node 4] --> Ring
+flowchart LR
+    K["Key: user:42"] --> A["Score(key, Node A)<br/>0.18"]
+    K --> B["Score(key, Node B)<br/>0.91"]
+    K --> C["Score(key, Node C)<br/>0.37"]
+    A --> Pick{"Choose highest score"}
+    B --> Pick
+    C --> Pick
+    Pick -->|0.91| Owner["Owner: Node B"]
 ```
+
+### What happens when the server pool changes?
+If Node B is removed, `user:42` moves to Node C, its next-highest scoring server. Keys owned by other nodes keep their owners. If a node is added, only keys for which the new node scores higher than their current owner move to it.
+
+With well-distributed scores and equally weighted nodes, removing one of `N` nodes moves about `1/N` of keys; adding a node to a pool of `N` moves about `1/(N+1)`. These are expected proportions, not guarantees for every key set. By contrast, a simple `hash(key) % N` assignment can remap most keys when `N` changes.
+
+### Practical considerations
+- Use stable, unique server IDs as hash inputs; changing an ID is effectively removing one node and adding another.
+- All clients that compute assignments must use the same hash function and server list.
+- For replicated data, choose the top `R` distinct servers by score instead of only the top one.
+- A straightforward implementation scores every key against every server, so assignment work grows with the size of the server pool.
 
 ### Where it appears
 - cache sharding
@@ -296,34 +331,112 @@ graph LR
 
 ## 8) Health Checks (Active vs Passive)
 
-Health checks are how a load balancer decides whether a server is healthy enough to receive traffic.
+Health checks determine whether a backend should remain in the load-balancer pool. The goal is to detect failure quickly without repeatedly removing and re-adding a server for a transient problem.
 
-| Type | Examples | Benefits | Drawbacks |
-|---|---|---|---|
-| Active | HTTP `/health`, TCP probes, gRPC health checks | Proactive and accurate | Extra traffic and tuning overhead |
-| Passive | Timeouts, 5xx spikes, connection resets | Low overhead, simple | Slower to respond and can route around bad nodes too long |
+| Type | How it works | Examples | Strengths | Limitations |
+|---|---|---|---|---|
+| Active | The load balancer sends probes on a schedule | HTTP `/health`, TCP connect, gRPC health API | Detects failure even when traffic is low; consistent across nodes | Adds probe traffic; a probe result may differ from real request behavior |
+| Passive | The load balancer observes real requests and connections | Timeouts, connection failures, 5xx rate, retries | Uses low overhead and reflects real client experience | May be slow when traffic is low or noisy; a few bad requests can trigger false positives |
 
 ### Active health checks
-The load balancer periodically probes each server.
+
+An active check regularly sends a lightweight request to every backend. A TCP check verifies only that a connection can be established, while an HTTP or gRPC check can verify application readiness.
+
+A good health endpoint is designed for the question it answers:
+
+| Endpoint/check | Checks | Use |
+|---|---|---|
+| `/livez` | Is the process able to handle requests? | Restart or replace a dead process |
+| `/readyz` | Are required dependencies and initialization complete? | Remove a backend from traffic, but do not necessarily restart it |
+| Deep `/health` | Database, cache, queue, disk, or downstream dependencies | Use carefully; one unhealthy dependency can remove an entire pool |
+
+The probe interval, timeout, success threshold, and failure threshold should be tuned independently:
+
+- **Probe interval:** how often each backend is checked.
+- **Timeout:** how long one probe is allowed to run.
+- **Success threshold:** consecutive successes required before re-adding a backend.
+- **Failure threshold:** consecutive failures required before removing a backend.
+
+For example, with a 5-second interval and a failure threshold of 3, a backend that fails one or two isolated probes remains eligible. After 3 consecutive failures it is removed and is not retried until it passes the configured success threshold.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Healthy
+    Healthy --> Suspect: Probe failure
+    Suspect --> Healthy: Success threshold met
+    Suspect --> Unhealthy: Failure threshold met
+    Unhealthy --> Recovering: First successful probe
+    Recovering --> Healthy: Success threshold met
+    Recovering --> Unhealthy: Probe failure
+```
+
+This hysteresis prevents a noisy check from repeatedly adding and removing a backend. Adding a short drain period can also stop new traffic while existing requests finish.
 
 ### Passive health checks
-The load balancer infers health from observed traffic or request failures.
 
-### Good production pattern
-Use both: active checks for health verification and passive checks for quick failure detection under real traffic.
+Passive detection uses observations from traffic that the load balancer is already forwarding. A backend may be removed when a rolling window contains too many timeouts, connection resets, 502/503/504 responses, or refused connections.
+
+To avoid blaming an entire node for one bad request:
+
+- evaluate a minimum request count or a rolling error percentage
+- use thresholds separate from normal active health
+- exclude expected application responses such as a 404 or a client cancellation
+- cool down a removed backend before routing traffic to it again
+
+Passive checks respond faster than waiting for the next active probe, but they are weak under low traffic. If only one request is sent to a backend and it fails, the error might reflect the request itself rather than backend-wide failure.
+
+### Health signal design
+
+Health is a routing decision, not a binary signal for the whole system. Prefer a readiness endpoint that verifies the work the instance can safely perform:
+
+```text
+/readyz
+200: instance is initialized and ready for traffic
+503: instance is starting, draining, overloaded, or blocked on a required dependency
+```
+
+A pod should also stop advertising itself after it begins shutdown. Otherwise, the load balancer may keep sending requests to an instance that is closing listeners or terminating.
+
+Active and passive signals complement each other:
 
 ```mermaid
 flowchart TD
-    LB[Load Balancer] --> Probe[Active Health Check]
-    Probe --> H1[Server A Healthy]
-    Probe --> H2[Server B Unhealthy]
-    LB --> Traffic[Real Traffic]
-    Traffic --> Fail[Passive Failure Detection]
-    Fail --> Remove[Remove Bad Server from Pool]
+    LB[Load Balancer] --> Active[Active probe]
+    LB --> Real[Real request traffic]
+    Active --> State[Update backend state]
+    Real --> Observe[Observe timeout and error rate]
+    Observe --> State
+    State --> Healthy{Healthy?}
+    Healthy -->|Yes| Route[Include in pool]
+    Healthy -->|No| Remove[Remove and drain]
+    Remove --> Recovery[Probe until recovery succeeds]
+    Recovery --> State
 ```
 
-### Interview point
-This is often the difference between a system that “looks healthy” and a system that truly recovers from failure.
+### Good production pattern
+
+Use active checks for a baseline health and readiness signal, plus passive checks to react quickly to failures seen by real traffic. Keep active endpoints cheap and deterministic, and do not make them depend on every optional downstream service.
+
+| Scenario | Recommended approach |
+|---|---|
+| Rolling deployment | Readiness check for initialization; success threshold before routing starts |
+| Sudden backend crash | Passive detection for rapid removal and active probe for recovery |
+| Dependency outage | Mark readiness false only if the backend cannot serve meaningful traffic |
+| Draining instance | Stop new traffic, finish existing requests, then shut down |
+| Low-traffic backend | Rely mainly on active probes; passive samples may be too small |
+
+### Common failure modes
+
+- **Liveness used as readiness:** a live process that cannot serve traffic remains in the pool.
+- **No thresholds:** one transient timeout ejects an otherwise healthy backend.
+- **Aggressive re-add:** a server flaps between healthy and unhealthy, creating retry storms.
+- **Traffic-sensitive false alarms:** one malformed request or small 5xx sample marks the node unhealthy.
+- **Dependency coupling:** a failure in an optional service incorrectly makes every replica unavailable.
+- **Probe from the wrong network path:** the probe succeeds even though user traffic cannot reach the backend.
+
+### Interview answer
+
+Health checks tell the load balancer which replicas are eligible for traffic. Active checks provide proactive, consistent verification, while passive checks use real-time evidence to catch failures quickly. A strong answer describes thresholds and hysteresis, readiness versus liveness, and the tradeoff between fast failure detection and false removals.
 
 ---
 
