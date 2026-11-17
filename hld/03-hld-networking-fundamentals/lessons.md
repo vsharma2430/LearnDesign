@@ -210,15 +210,26 @@ A checksum is a value computed from data to detect accidental changes or corrupt
 
 Checksums are not all equivalent. A simple checksum or CRC can efficiently detect many accidental errors, but it is not designed to resist an attacker who deliberately changes data. Cryptographic hashes make collision or tampering harder, while a message authentication code (MAC) or digital signature can authenticate integrity against an attacker under the relevant key assumptions. TLS provides authenticated integrity for protected records, so an application should not mistake a basic checksum for security.
 
+**Mental model:** A checksum is like a comparison tag for data: the receiver recomputes it and checks whether it matches. A match suggests the data stayed intact, but a basic checksum does not prove who sent it or prevent deliberate changes.
+
 ```mermaid
 flowchart LR
-    Sender[Sender data] --> Calc1[Compute checksum or digest]
-    Sender --> Network[Transmit data and check value]
-    Network --> Receiver[Receiver data]
-    Receiver --> Calc2[Recompute check value]
-    Calc2 --> Compare{Values match?}
-    Compare -->|Yes| Accept[Accept as uncorrupted]
-    Compare -->|No| Detect[Detect corruption or tampering]
+    A[Original data] --> B[Compute checksum or digest]
+    B --> C[Send data + checksum]
+    C --> D[Network / storage path]
+    D --> E[Received data]
+    E --> F[Recompute checksum]
+
+    B --> G[Expected checksum]
+    F --> H{Checksum matches?}
+    G --> H
+
+    H -->|Yes| I[Accept as intact]
+    H -->|No| J[Detect corruption or tampering]
+    J --> K[Reject, retry, or re-fetch]
+
+    D -. bit flips, packet loss, disk errors .-> J
+    K --> L[CRC detects accidental damage; MAC/hash/signature helps against tampering]
 ```
 
 **System-design application:** Checksums can help validate large files, object-store uploads, backups, and replicated data. For important data, pair integrity checks with repair or re-fetch logic and use a cryptographic integrity mechanism when malicious tampering is in scope.
@@ -238,12 +249,16 @@ A useful mental model is: a forward proxy sits on the client path; a reverse pro
 | Common uses | Egress control, caching, filtering | Routing, TLS termination, load balancing |
 
 ```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 12, "rankSpacing": 16, "padding": 5}}}%%
 flowchart LR
-    subgraph Outbound["Forward proxy: client-side"]
-        C[Client] --> FP[Forward proxy] --> Internet[External service]
+    subgraph Outbound["Forward proxy"]
+        direction TB
+        C[Client] --> FP[Proxy] --> Internet[Internet]
     end
-    subgraph Inbound["Reverse proxy: service-side"]
-        User[User] --> RP[Reverse proxy] --> B1[Backend 1]
+    subgraph Inbound["Reverse proxy"]
+        direction TB
+        User[Client] --> RP[Proxy]
+        RP --> B1[Backend 1]
         RP --> B2[Backend 2]
     end
 ```
@@ -252,54 +267,70 @@ Proxies create a policy and failure boundary. They must be sized, monitored, and
 
 ## 9) NAT and Firewalls
 
-Network Address Translation (NAT) rewrites address information as packets cross a network boundary. A common use is allowing many private IPv4 devices to share a smaller set of public addresses. Port address translation distinguishes concurrent connections by mapping address-and-port combinations. NAT can affect inbound connectivity and complicate protocols that embed address information, so it should not be treated as a security control by itself.
+Think of a home network: your laptop and phone have private addresses that work inside the home, while the router has a public address for communicating with the internet.
 
-A firewall enforces traffic policy. Rules may allow or deny traffic based on addresses, ports, protocols, connection state, or—in application-aware products—higher-layer information. Stateful firewalls track active flows and permit return traffic for an allowed connection; stateless rules evaluate packets independently.
+**NAT (Network Address Translation)** is the router's address-changing job. When your laptop starts a connection to a website, the router replaces the laptop's private address with its public address and records which connection it belongs to. When the website replies, the router uses that record to send the reply back to the laptop. Port address translation (PAT), the common form of NAT for IPv4, uses port numbers to keep many devices' connections distinct while they share one public IP address.
 
-In practice, NAT changes how addresses appear at a boundary, while the firewall decides what traffic is allowed to cross it.
+**A firewall is the traffic gatekeeper.** It checks traffic against rules, which can use IP addresses, ports, protocols, connection state, and sometimes application details. A stateful firewall remembers allowed connections and lets their replies back through; a stateless firewall checks each packet against the rules independently.
 
 ```mermaid
 flowchart LR
-    Private[Private hosts] --> NAT[NAT gateway]
-    NAT --> FW[Firewall policy]
-    FW --> Public[External network]
-    Internet[Untrusted inbound traffic] --> FW
-    FW -->|Only explicitly allowed paths| PublicService[Public entry point]
+    Laptop[Laptop: private IP] -->|Starts connection| Router[Home router]
+    Phone[Phone: private IP] -->|Starts connection| Router
+    Router -->|NAT maps private addresses and ports to public address| Internet[Website on the internet]
+    Internet -->|Reply for an existing connection| Router
+    Router -->|Uses mapping to deliver reply| Laptop
+    Internet -->|New, unsolicited connection| Policy{Firewall rules}
+    Policy -->|Allowed| Service[Public service]
+    Policy -->|Not allowed| Drop[Blocked]
 ```
 
-Use least privilege: expose only the required ports and destinations, separate public entry points from internal services, and log meaningful policy decisions. NAT changes how addresses appear; the firewall's explicit rules are what allow or block traffic. In cloud systems, security groups, network ACLs, and application-layer controls may operate at different scopes and should be reasoned about together.
+In short: **NAT changes addresses; a firewall allows or blocks traffic.** NAT often makes it harder for an outside host to start a connection to a device inside a home network, but that behavior is not a replacement for firewall rules or other security controls. In cloud systems, security groups, network ACLs, and application-layer controls may apply at different scopes, so reason about each boundary separately.
+
+**System-design application:** Use least privilege: expose only the required ports and destinations, separate public entry points from internal services, and log meaningful policy decisions.
 
 ## 10) HTTP/1.1 vs HTTP/2 vs HTTP/3
 
-HTTP versions preserve core HTTP semantics but differ in how messages are transported and multiplexed.
+HTTP is the set of rules a browser and a website use to exchange requests and responses. All three versions can do things like request a page or send form data; the main difference is how those messages travel.
 
-- **HTTP/1.1** commonly uses persistent TCP connections, but requests on a connection are generally processed in order. Browsers often open multiple connections to reduce head-of-line blocking. Textual message framing and connection management can add overhead.
-- **HTTP/2** uses binary framing and multiplexes multiple streams over one TCP connection. Header compression reduces repeated metadata. Because streams share one TCP connection, packet loss can delay delivery across streams until TCP recovers the missing bytes.
-- **HTTP/3** uses HTTP over QUIC, which runs over UDP. QUIC provides encrypted transport and independent streams, reducing cross-stream blocking from packet loss at the transport layer. It can also reduce connection setup latency in some cases. UDP availability and middlebox behavior still matter.
+**Picture a webpage that needs three things:** an HTML file, a picture, and a style sheet. A *connection* is the communication path between the browser and the server. A *stream* is one exchange of data within that path.
 
-| Version | Transport | Multiplexing | Important consideration |
-|---|---|---|---|
-| HTTP/1.1 | TCP | Limited; often multiple connections | Connection count and sequential request handling |
-| HTTP/2 | TCP | Multiple streams per connection | TCP loss can stall all streams on that connection |
-| HTTP/3 | QUIC over UDP | Independent streams | Requires compatible clients, servers, and network paths |
+**Multiplexing** means sending small pieces of several streams over the same connection, taking turns between them instead of finishing one whole response before starting another. For example, the browser can receive a piece of the HTML, then a piece of the picture, then more HTML. This is like several people sharing one road by taking turns to use it; it does not mean each stream gets its own connection.
+
+- **HTTP/1.1: take turns on a path.** A browser typically waits for one request's response before sending the next on that connection. It can open several connections to get more things at once, but each connection is still mostly taking turns. This is like having several checkout lines, with one customer served at a time in each line.
+- **HTTP/2: share one path.** It multiplexes several streams over one TCP connection, so the browser does not have to finish one response before sending another. But TCP delivers data in order: if a packet goes missing, the connection must wait for it to be recovered, which can briefly hold up data for all those conversations. HTTP/2 also compresses repeated headers (request details such as cookies), reducing some overhead.
+- **HTTP/3: separate the streams' waiting.** It carries HTTP over **QUIC**, a transport protocol (rules for moving data between devices) built on UDP. UDP alone does not ensure data arrives, so QUIC adds reliable delivery and encryption. QUIC tracks delivery separately for each stream: if data for the picture is lost, it can wait for that data without automatically holding up the HTML or style-sheet stream. Connection setup can also take fewer round trips in some cases.
+
+In everyday terms: HTTP/1.1 mostly takes turns, HTTP/2 lets exchanges share a connection but can make them wait on a lost packet, and HTTP/3 avoids that particular cross-stream wait. HTTP/3 does not prevent every delay: streams still share network capacity, and network conditions, server work, or a slow database can still slow a page.
+
+| Version | Transport | Multiplexing | Important consideration | Typical use case |
+|---|---|---|---|---|
+| HTTP/1.1 | TCP | Limited; often uses several connections | Requests on each connection mostly take turns | Legacy systems and broad compatibility, or when HTTP/2/3 is unavailable |
+| HTTP/2 | TCP | Multiple streams on one connection | A lost packet can briefly hold up all streams on that connection | Common choice for websites and APIs that benefit from multiplexing and have TCP connectivity |
+| HTTP/3 | QUIC over UDP | Multiple streams with independent delivery | Needs QUIC support and a network path that allows it | Latency-sensitive or mobile traffic, especially on lossy or changing networks, when QUIC is supported |
+| HTTPS (not an HTTP version) | TLS with HTTP/1.1 or HTTP/2 over TCP; TLS is integrated into QUIC for HTTP/3 | Depends on the HTTP version | Protects traffic in transit and authenticates the server when its certificate is validated | Use for virtually all public browser and API traffic that needs confidentiality and server authentication |
 
 ```mermaid
 flowchart TB
     subgraph H1["HTTP/1.1"]
-        A1[Request 1] --> A2[Response 1] --> A3[Request 2] --> A4[Response 2]
+        A1[Request HTML] --> A2[Response HTML] --> A3[Request image] --> A4[Response image]
     end
     subgraph H2["HTTP/2 over one TCP connection"]
-        B1[Stream 1] --- B2[Stream 2]
-        B1 --> B3[Shared TCP delivery and loss recovery]
-        B2 --> B3
+        B1[HTML stream] --> B3[One TCP connection]
+        B2[Image stream] --> B3
+        B3 -. lost packet can delay both .-> B4[Wait for TCP recovery]
     end
     subgraph H3["HTTP/3 over QUIC"]
-        C1[Stream 1] --> C3[Independent stream recovery]
-        C2[Stream 2] --> C3
+        C1[HTML stream] --> C3[QUIC connection]
+        C2[Image stream] --> C3
+        C1 -. lost data .-> C4[Wait for HTML data]
+        C2 --> C5[Image data can keep arriving]
     end
 ```
 
-The newest version is not automatically best for every deployment. Measure client support, network conditions, CPU cost, connection reuse, and end-to-end latency. A version upgrade does not remove application bottlenecks such as slow database queries or oversized payloads.
+The newest version is not automatically best for every deployment. Browsers and servers negotiate a version they both support, and a network may affect which transports work well. Measure real end-to-end latency and resource use; changing HTTP versions does not fix application bottlenecks such as slow database queries or oversized payloads.
+
+**HTTPS is not a fourth HTTP version or a transport like TCP or QUIC.** It is HTTP protected by TLS: HTTP/1.1 and HTTP/2 commonly use TLS over TCP, while HTTP/3 uses QUIC, which incorporates TLS. The HTTP version determines how requests and responses are carried; HTTPS provides encryption in transit and server authentication across those versions.
 
 ## 11) Keep-Alive Connections
 
@@ -339,22 +370,28 @@ Security headers are defense in depth, not a replacement for output encoding, au
 
 ## 13) CORS
 
-Cross-Origin Resource Sharing (CORS) is a browser-enforced policy that controls whether JavaScript running at one origin may read a response from another origin. An origin is the combination of scheme, hostname, and port. CORS is not authentication and does not prevent non-browser clients from making requests; it governs browser access to responses.
+**CORS** (Cross-Origin Resource Sharing) is a rule browsers use to decide whether a web page is allowed to read data from another origin. An origin is made of the **scheme** (`http` or `https`), **hostname**, and **port**. For example, `https://shop.example` and `https://api.example` are different origins. So are `http://localhost:3000` and `http://localhost:5000` because their ports differ.
 
-For a simple cross-origin request, the browser sends an `Origin` header and checks the server's `Access-Control-Allow-Origin` response. For requests using non-simple methods or headers, the browser may first send a preflight `OPTIONS` request asking which methods and headers are allowed.
+By default, a page can read responses from its own origin. If JavaScript on `https://shop.example` calls `https://api.example`, the browser checks whether the API allows that page's origin. The API grants permission with a response header such as `Access-Control-Allow-Origin: https://shop.example`. If the permission is missing or does not match, the browser does not let the page's JavaScript read the response—even if the API received the request and sent a response.
+
+Some cross-origin requests can be sent right away. For others—for example, a `PUT` request or a request with a non-standard header—the browser first sends a **preflight** request: an `OPTIONS` request asking whether the API allows the planned method and headers. If the API approves, the browser sends the actual request. If not, it stops before sending it.
 
 ```mermaid
 sequenceDiagram
     participant B as Browser at app.example
     participant API as api.example
-    B->>API: OPTIONS preflight with Origin and requested method
-    API-->>B: Allow-Origin, Allow-Methods, Allow-Headers
+    opt Request needs preflight
+        B->>API: OPTIONS: may I use this method and these headers?
+        API-->>B: Allow-Origin, Allow-Methods, Allow-Headers
+    end
     B->>API: Actual cross-origin request
-    API-->>B: Response with CORS headers
-    B->>B: Expose response only if policy permits
+    API-->>B: Response, including CORS permission
+    B->>B: Let page JavaScript read it only if permission matches
 ```
 
-When credentials such as cookies are included, the server must allow credentials explicitly and return a specific allowed origin; wildcard origin is not valid for credentialed access. Avoid reflecting arbitrary `Origin` values. Configure only trusted origins, methods, and headers, and use CSRF protections where cookie-based authentication is involved.
+**CORS is not authentication or a firewall.** It does not stop non-browser clients (such as `curl` or another server) from making requests, and it does not decide whether a user is authorized. The API must still authenticate users and check permissions for every request.
+
+When a browser request includes credentials such as cookies, the API must explicitly allow credentials and name the specific allowed origin; `*` cannot be used for credentialed access. Configure only trusted origins, methods, and headers—do not blindly echo any `Origin` the API receives. CORS is also not a substitute for CSRF protections when using cookie-based authentication.
 
 ## 14) Putting the request path together
 
